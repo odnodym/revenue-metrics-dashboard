@@ -27,7 +27,16 @@ This project analyzes revenue and user subscription metrics using SQL and Tablea
 - Tableau Public
 - DBeaver
 
-## Dashboard
+## Skills Demonstrated
+- SQL
+- PostgreSQL
+- Tableau Public
+- Data Analysis
+- Data Visualization
+- KPI Reporting
+- Revenue Analytics
+
+## Interactive Dashboard
 Tableau Public:
 https://public.tableau.com/views/2_17800856264590/RevenueMetricsDashboard?:language=en-US&:sid=&:redirect=auth&:display_count=n&:origin=viz_share_link
 
