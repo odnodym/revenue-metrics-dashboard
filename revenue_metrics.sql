@@ -1,0 +1,184 @@
+WITH monthly_revenue AS (
+
+    SELECT
+        DATE(DATE_TRUNC('month', p.payment_date)) AS payment_month,
+        p.user_id,
+        p.game_name,
+        u.language,
+        u.age,
+        SUM(p.revenue_amount_usd) AS total_revenue
+
+    FROM project.games_payments p
+    JOIN project.games_paid_users u
+        ON p.user_id = u.user_id
+       AND p.game_name = u.game_name
+
+    GROUP BY 1,2,3,4,5
+
+),
+
+base_table AS (
+
+    SELECT
+        *,
+
+        DATE(payment_month - INTERVAL '1 month') AS previous_calendar_month,
+        DATE(payment_month + INTERVAL '1 month') AS next_calendar_month,
+
+        LAG(payment_month)
+            OVER(PARTITION BY user_id ORDER BY payment_month)
+            AS previous_paid_month,
+
+        LEAD(payment_month)
+            OVER(PARTITION BY user_id ORDER BY payment_month)
+            AS next_paid_month,
+
+        LAG(total_revenue)
+            OVER(PARTITION BY user_id ORDER BY payment_month)
+            AS previous_paid_month_revenue
+
+    FROM monthly_revenue
+
+),
+
+metrics AS (
+
+    SELECT
+        *,
+
+        CASE
+            WHEN previous_paid_month IS NULL
+            THEN total_revenue
+        END AS new_mrr,
+
+        CASE
+            WHEN previous_paid_month IS NULL
+            THEN 1
+        END AS new_paid_users,
+
+        CASE
+            WHEN next_paid_month IS NULL
+              OR next_paid_month <> next_calendar_month
+            THEN total_revenue
+        END AS churned_revenue,
+
+        CASE
+            WHEN next_paid_month IS NULL
+              OR next_paid_month <> next_calendar_month
+            THEN 1
+        END AS churned_users,
+
+        CASE
+            WHEN previous_paid_month = previous_calendar_month
+             AND total_revenue > previous_paid_month_revenue
+            THEN total_revenue - previous_paid_month_revenue
+        END AS expansion_mrr,
+
+        CASE
+            WHEN previous_paid_month = previous_calendar_month
+             AND total_revenue < previous_paid_month_revenue
+            THEN previous_paid_month_revenue - total_revenue
+        END AS contraction_mrr
+
+    FROM base_table
+
+),
+
+monthly_metrics AS (
+
+    SELECT
+        payment_month,
+        game_name,
+        language,
+        age,
+
+        SUM(total_revenue) AS mrr,
+
+        COUNT(DISTINCT user_id) AS paid_users,
+
+        SUM(total_revenue)
+            / NULLIF(COUNT(DISTINCT user_id),0) AS arppu,
+
+        SUM(COALESCE(new_mrr,0)) AS new_mrr,
+
+        SUM(COALESCE(new_paid_users,0)) AS new_paid_users,
+
+        SUM(COALESCE(churned_revenue,0)) AS churned_revenue,
+
+        SUM(COALESCE(churned_users,0)) AS churned_users,
+
+        SUM(COALESCE(expansion_mrr,0)) AS expansion_mrr,
+
+        SUM(COALESCE(contraction_mrr,0)) AS contraction_mrr
+
+    FROM metrics
+
+    GROUP BY 1,2,3,4
+
+),
+
+final_metrics AS (
+
+    SELECT
+        *,
+
+        LAG(paid_users)
+            OVER(
+                PARTITION BY game_name, language, age
+                ORDER BY payment_month
+            ) AS prev_paid_users,
+
+        LAG(mrr)
+            OVER(
+                PARTITION BY game_name, language, age
+                ORDER BY payment_month
+            ) AS prev_mrr
+
+    FROM monthly_metrics
+
+)
+
+SELECT
+    payment_month,
+    game_name,
+    language,
+    age,
+
+    mrr,
+    paid_users,
+    arppu,
+
+    new_mrr,
+    new_paid_users,
+
+    churned_revenue,
+    churned_users,
+
+    expansion_mrr,
+    contraction_mrr,
+
+    churned_users::numeric
+        / NULLIF(prev_paid_users,0) AS churn_rate,
+
+    churned_revenue
+        / NULLIF(prev_mrr,0) AS revenue_churn_rate,
+
+    1 /
+        NULLIF(
+            churned_users::numeric
+            / NULLIF(prev_paid_users,0),
+            0
+        ) AS lt,
+
+    arppu *
+    (
+        1 /
+        NULLIF(
+            churned_users::numeric
+            / NULLIF(prev_paid_users,0),
+            0
+        )
+    ) AS ltv
+
+FROM final_metrics
+ORDER BY payment_month, language, age;
